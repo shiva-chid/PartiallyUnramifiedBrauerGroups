@@ -1,24 +1,26 @@
-// partially_ramified_brauer_pairs.m
+// ChatGPT_implementation_fixed.mg
 //
-// Prototype Magma implementation of the algorithm in the prompt.
-// Base field: Q.  Coefficients: Z/2Z for the geometric part.
+// Prototype Magma implementation for partially ramified Brauer pairs over Q.
+// Coefficients for the geometric part are F_2 = Z/2Z.
 //
 // Main entry point:
 //     R := PartiallyRamifiedBrauerPairs(G, Creps);
-// where G is a finite Magma group accepted by the cohomology package and Creps is
-// a sequence of representatives for the conjugacy classes C_i.
+// where G is a finite Magma group and Creps is a sequence of representatives
+// for the conjugacy classes C_i.
 //
-// Output R is a record.  The most important fields are:
-//   R`GeometricBasisH2       basis for the residue-kernel inside H^2(G,F_2)
-//   R`GeometricExtensions    explicit central extensions for these basis classes
-//   R`AlgebraicBasis         basis pairs <unit-character-index, G-character-index>
-//   R`MatchBasis             F_2-basis for all matching pairs (geo coords | alg coords)
-//   R`MatchingPairs          enumerated pairs <geo coords, alg coords>, if small enough
-//   R`ResidueIndex           ordered list of pairs <i,k>, k in N_i, used for residues
+// Output R is a record.  Important fields:
+//   R`GeometricBasisH2          basis for the residue-kernel inside H^2(G,F_2)
+//   R`GeometricExtensions       explicit central extensions F_2 -> E -> G
+//   R`GeometricMarkings         marking conjugacy classes D_i in E
+//   R`AlgebraicBasis            basis for Hom(U_2,Ghat[2])
+//   R`GeometricResidueMatrix    step 4 residues
+//   R`AlgebraicResidueMatrix    step 5 residues
+//   R`MatchBasis                F_2-basis for all matching pairs
+//   R`MatchingPairs             enumerated pairs, if small enough
 //
-// Assumption/convention: Creps are representatives of the desired C_i; their
-// conjugacy classes are used internally.  The Q-anticyclotomic action is encoded
-// by invertible powering modulo 2*#G.
+// This version avoids the non-portable intrinsic ConjugacyClass(G,g) by using
+// an explicit conjugation loop.  That was the source of the loading error in
+// the first draft.
 
 // -----------------------------------------------------------------------------
 // Small utilities
@@ -34,6 +36,14 @@ function IsTwoPower(n)
     return n eq 1;
 end function;
 
+function SeqSumInt(S)
+    s := 0;
+    for x in S do
+        s +:= x;
+    end for;
+    return s;
+end function;
+
 function UnitMulMod(a,b,N)
     r := (a*b) mod N;
     if r eq 0 then
@@ -43,8 +53,9 @@ function UnitMulMod(a,b,N)
 end function;
 
 function UnitInvMod(a,N)
+    aa := a mod N;
     for b in [1..N] do
-        if GCD(b,N) eq 1 and ((a*b - 1) mod N) eq 0 then
+        if GCD(b,N) eq 1 and ((aa*b - 1) mod N) eq 0 then
             return b;
         end if;
     end for;
@@ -55,9 +66,12 @@ function UnitOrderMod(a,N)
     if GCD(a,N) ne 1 then
         error "UnitOrderMod: input is not a unit modulo N";
     end if;
-    r := 1;
     b := a mod N;
+    if b eq 0 then
+        b := N;
+    end if;
     c := b;
+    r := 1;
     while c ne 1 do
         c := (c*b) mod N;
         r +:= 1;
@@ -66,11 +80,21 @@ function UnitOrderMod(a,N)
 end function;
 
 function ClassSet(G,g)
-    return { x : x in ConjugacyClass(G,g) };
+    // Version-safe replacement for the unavailable ConjugacyClass(G,g).
+    // Magma supports group iteration for finite groups; x^-1*g*x is the
+    // conjugate of g by x.
+    return { x^-1*g*x : x in G };
 end function;
 
 function ClassPowerSet(G,C,k)
     return { x^k : x in C };
+end function;
+
+function CohomologyGroupGenerators(H)
+    // CohomologyGroup(CM,n) is an abelian group in the standard Magma package.
+    // For our F_2-coefficients it is elementary abelian, and the standard
+    // generators give an F_2-basis.
+    return [ H.i : i in [1..Ngens(H)] | Order(H.i) ne 1 ];
 end function;
 
 function BitOfModuleElt(v)
@@ -83,9 +107,6 @@ function BitSeq(v)
 end function;
 
 function LinCombF2(basis, coeffs)
-    if #basis eq 0 then
-        error "LinCombF2: empty basis has no ambient parent";
-    end if;
     s := Parent(basis[1])!0;
     for j in [1..#basis] do
         if ((Integers()!coeffs[j]) mod 2) eq 1 then
@@ -179,12 +200,12 @@ function ValidateCAndComputeNi(G, Creps, U2, N)
     for C in Csets do
         Ugens := Ugens join C;
     end for;
-    if sub< G | SetToSequence(Ugens) > ne G then
+    UgensSeq := [ x : x in Ugens ];
+    if sub< G | UgensSeq > ne G then
         return false, "The union of the supplied conjugacy classes does not generate G.", [], [];
     end if;
 
-    // Check closure under invertible powers.  It is enough, and cheaper, to check
-    // all units modulo #G; this is what the prompt asks for.
+    // Check closure under invertible powers modulo |G|.
     unitsG := [ a : a in [1..#G] | GCD(a,#G) eq 1 ];
     for i in [1..#Csets] do
         for t in unitsG do
@@ -219,7 +240,8 @@ end function;
 // -----------------------------------------------------------------------------
 
 function TrivialF2CohomologyModule(G)
-    mats := [ Matrix(GF(2),1,1,[ GF(2)!1 ]) : i in [1..Ngens(G)] ];
+    F := GF(2);
+    mats := [ IdentityMatrix(F,1) : i in [1..Ngens(G)] ];
     M := GModule(G, mats);
     return CohomologyModule(G, M);
 end function;
@@ -227,10 +249,10 @@ end function;
 function GeometricResidueKernel(G, Creps, CM)
     F := GF(2);
     H2 := CohomologyGroup(CM,2);
-    H2basis := Basis(H2);
+    H2basis := CohomologyGroupGenerators(H2);
     twos := [ TwoCocycleBitFunction(CM, b, G) : b in H2basis ];
 
-    nrows := &+[ Ngens(Centralizer(G,g)) : g in Creps ];
+    nrows := SeqSumInt([ Ngens(Centralizer(G,g)) : g in Creps ]);
     A := ZeroMatrix(F, nrows, #H2basis);
 
     row := 0;
@@ -323,12 +345,11 @@ end function;
 function GeometricMarkingData(G, Creps, Ext)
     E := Ext`E;
     Lift := Ext`Lift;
-    Projection := Ext`Projection;
 
     Dclasses := [];
     for gi in Creps do
         tg := Lift(gi);
-        D := { x : x in ConjugacyClass(E, tg) };
+        D := ClassSet(E, tg);
         Append(~Dclasses, D);
     end for;
 
@@ -366,7 +387,7 @@ end function;
 function AlgebraicResidueData(G, Creps, CM, Udata, Nlist)
     F := GF(2);
     H1 := CohomologyGroup(CM,1);
-    H1basis := Basis(H1);
+    H1basis := CohomologyGroupGenerators(H1);
     chars := [ OneCocycle(CM, b) : b in H1basis ];
 
     chiVals := [];
@@ -377,7 +398,7 @@ function AlgebraicResidueData(G, Creps, CM, Udata, Nlist)
     Ubas := Udata`Basis;
     AlgBasis := [ <a,j> : a in [1..#Ubas], j in [1..#H1basis] ];
 
-    R := &+[ #Nlist[i] : i in [1..#Nlist] ];
+    R := SeqSumInt([ #Nlist[i] : i in [1..#Nlist] ]);
     A := ZeroMatrix(F, R, #AlgBasis);
 
     row := 0;
@@ -464,7 +485,6 @@ function PartiallyRamifiedBrauerPairs(G, Creps : MaxEnumerate := 4096, CheckInpu
                      MatchRecord >;
 
     if (#G mod 2) eq 1 then
-        // Non-trivial 2-primary data is zero; return the unique zero pair.
         return rec< RF | Ok := true,
                          Message := "Odd order group: non-trivial 2-primary Brauer data is zero.",
                          GOrder := #G, Modulus := 2*#G,
@@ -566,8 +586,9 @@ procedure PrintBrauerPairSummary(R)
 end procedure;
 
 // -----------------------------------------------------------------------------
-// Example usage (uncomment inside Magma):
+// Example usage inside Magma:
 //
+// load "ChatGPT_implementation_fixed.mg";
 // G := Alt(4);
 // R := PartiallyRamifiedBrauerPairs(G, [ G!(1,2,3), G!(1,3,2) ]);
 // PrintBrauerPairSummary(R);
