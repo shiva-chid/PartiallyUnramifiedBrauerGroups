@@ -5,7 +5,7 @@ testgroups := [* *];
     C:=[ G.1, G.1^3 ];
 Append(~testgroups, [*G,C*]);
     G:=CyclicGroup(8);
-    C:=[ g : g in G ];
+    C:=[ g : g in G | g ne Id(G)];
 Append(~testgroups, [*G,C*]);
     G:=Sym(4);
     C:=[ G!(1,2), G!(1,2,3) ];
