@@ -1,4 +1,4 @@
-// ChatGPT_implementation_v2.mg
+// ChatGPT_implementation_v4.mg
 //
 // Prototype Magma implementation for partially ramified Brauer pairs over Q.
 // Coefficients for the geometric part are F_2 = Z/2Z.
@@ -12,15 +12,21 @@
 //   R`GeometricBasisH2          basis for the residue-kernel inside H^2(G,F_2)
 //   R`GeometricExtensions       explicit central extensions F_2 -> E -> G
 //   R`GeometricMarkings         marking conjugacy classes D_i in E
-//   R`AlgebraicBasis            basis for Hom(U_2,Ghat[2])
+//   R`AlgebraicBasis            quotient basis for algebraic residues
 //   R`GeometricResidueMatrix    step 4 residues
 //   R`AlgebraicResidueMatrix    step 5 residues
 //   R`MatchBasis                F_2-basis for all matching pairs
 //   R`MatchingPairs             enumerated pairs, if small enough
 //
-// This version avoids the non-portable intrinsic ConjugacyClass(G,g) by using
+// This version fixes the missing power-transition rows and avoids the non-portable intrinsic ConjugacyClass(G,g) by using
 // an explicit conjugation loop.  It also treats CohomologyGroup(CM,n) whether
 // Magma returns it as an abelian group or as a vector space.
+//
+// v4 also corrects the algebraic side.  The previous versions used
+// Hom(U_2, Ghat[2]) as if the U_2-action on Ghat[2^infty] were trivial.
+// The correct algebraic residue data is obtained from 1-cocycles with values
+// in Ghat[2^infty], modulo coboundaries.  On the F_2-valued residue level this
+// means quotienting by coboundaries coming from 2*Ghat[4].
 
 // -----------------------------------------------------------------------------
 // Small utilities
@@ -90,6 +96,33 @@ function ClassPowerSet(G,C,k)
     return { x^k : x in C };
 end function;
 
+function ClassIndex(Csets, D)
+    for j in [1..#Csets] do
+        if D eq Csets[j] then
+            return j;
+        end if;
+    end for;
+    return 0;
+end function;
+
+function PowerTransitionRows(G, Csets, U2)
+    // Rows for arithmetic residues.  A row <i,k,j> means C_i^k=C_j.
+    // It is important to include transitions with i ne j: these enforce
+    // Galois/invertible-power compatibility between different conjugacy
+    // classes in the same orbit.
+    rows := [];
+    for i in [1..#Csets] do
+        for k in U2 do
+            j := ClassIndex(Csets, ClassPowerSet(G, Csets[i], k));
+            if j eq 0 then
+                error Sprintf("PowerTransitionRows: class %o powered by %o is not among the supplied classes.", i, k);
+            end if;
+            Append(~rows, <i,k,j>);
+        end for;
+    end for;
+    return rows;
+end function;
+
 function CohomologyGroupGenerators(H)
     // Magma versions differ here: CohomologyGroup(CM,n) may be returned either
     // as an abstract abelian group or directly as a vector space over GF(2).
@@ -127,6 +160,86 @@ function ColumnKernel(A)
     // Magma vector spaces use row vectors; Nullspace(M) is {v : v*M=0}.
     // Hence this computes {x : A*x^t = 0} as a row-vector space.
     return Nullspace(Transpose(A));
+end function;
+
+
+function SpanBasisF2(vectors, dim)
+    F := GF(2);
+    B := [];
+    for v0 in vectors do
+        v := [ F!x : x in v0 ];
+        if &and[ v[i] eq F!0 : i in [1..dim] ] then
+            continue;
+        end if;
+        oldRank := (#B eq 0) select 0 else Rank(Matrix(F, #B, dim, &cat B));
+        Btry := B cat [v];
+        newRank := Rank(Matrix(F, #Btry, dim, &cat Btry));
+        if newRank gt oldRank then
+            Append(~B, v);
+        end if;
+    end for;
+    return B;
+end function;
+
+function ComplementBasisF2(dim, subspaceBasis)
+    F := GF(2);
+    B := SpanBasisF2(subspaceBasis, dim);
+    C := [];
+    for i in [1..dim] do
+        e := [ F!0 : j in [1..dim] ];
+        e[i] := F!1;
+        oldRank := (#B eq 0) select 0 else Rank(Matrix(F, #B, dim, &cat B));
+        Btry := B cat [e];
+        newRank := Rank(Matrix(F, #Btry, dim, &cat Btry));
+        if newRank gt oldRank then
+            Append(~B, e);
+            Append(~C, e);
+        end if;
+    end for;
+    return C;
+end function;
+
+function MatrixFromColumnVectorsF2(nrows, cols)
+    F := GF(2);
+    M := ZeroMatrix(F, nrows, #cols);
+    for j in [1..#cols] do
+        for i in [1..nrows] do
+            M[i,j] := F!cols[j][i];
+        end for;
+    end for;
+    return M;
+end function;
+
+function LinearCombinationOfColumns(M, coeffs)
+    F := GF(2);
+    v := ZeroMatrix(F, Nrows(M), 1);
+    for j in [1..#coeffs] do
+        if (F!coeffs[j]) eq F!1 then
+            for i in [1..Nrows(M)] do
+                v[i,1] +:= M[i,j];
+            end for;
+        end if;
+    end for;
+    return [ v[i,1] : i in [1..Nrows(M)] ];
+end function;
+
+function QuotientProjectionMatrixF2(n, relationValueBasis)
+    // relationValueBasis is a list of row-vectors of length n spanning the
+    // subspace by which the residue codomain should be quotiented.
+    // The returned matrix P has rows spanning the annihilator, so P*r is a
+    // coordinate vector for the image of r in the quotient.
+    F := GF(2);
+    Wbasis := SpanBasisF2(relationValueBasis, n);
+    if #Wbasis eq 0 then
+        return IdentityMatrix(F, n);
+    end if;
+    Wcols := MatrixFromColumnVectorsF2(n, Wbasis);
+    Ann := Nullspace(Wcols);
+    rows := [ BitSeq(v) : v in Basis(Ann) ];
+    if #rows eq 0 then
+        return ZeroMatrix(F, 0, n);
+    end if;
+    return Matrix(F, #rows, n, &cat rows);
 end function;
 
 function TwoCocycleBitFunction(CM, h2elt, G)
@@ -364,34 +477,178 @@ function GeometricMarkingData(G, Creps, Ext)
     return rec< RF | Dclasses := Dclasses >;
 end function;
 
-function GeometricPowerResidueColumn(G, Creps, Nlist, Ext)
+function GeometricPowerResidueColumn(G, Creps, ResidueIndex, Ext)
     F := GF(2);
     E := Ext`E;
     z := Ext`z;
     Lift := Ext`Lift;
     vals := [];
 
-    for i in [1..#Creps] do
-        tg := Lift(Creps[i]);
-        for k in Nlist[i] do
-            pk := tg^k;
-            if IsConjugate(E, pk, tg) then
-                Append(~vals, F!0);
-            elif IsConjugate(E, pk, z*tg) then
-                Append(~vals, F!1);
-            else
-                error Sprintf("Geometric residue error on class %o and unit %o: power lift lies in neither fibre conjugacy class.", i, k);
-            end if;
-        end for;
+    for row in ResidueIndex do
+        i := row[1];
+        k := row[2];
+        j := row[3];
+        lhs := Lift(Creps[i])^k;
+        rhs := Lift(Creps[j]);
+        if IsConjugate(E, lhs, rhs) then
+            Append(~vals, F!0);
+        elif IsConjugate(E, lhs, z*rhs) then
+            Append(~vals, F!1);
+        else
+            error Sprintf("Geometric residue error on transition class %o --%o--> %o: powered lift lies in neither fibre conjugacy class.", i, k, j);
+        end if;
     end for;
     return Vector(F, vals);
 end function;
 
 // -----------------------------------------------------------------------------
-// Algebraic residue basis Hom(U_2, Ghat[2])
+// Algebraic residue basis: H^1(U_2, Ghat[2^infty]) on the F_2 residue level
 // -----------------------------------------------------------------------------
 
-function AlgebraicResidueData(G, Creps, CM, Udata, Nlist)
+function HomZ4ReductionsInH1(G, CM, H1basis)
+    // Return a basis, in H1basis-coordinates, for 2*Ghat[4] inside Ghat[2].
+    // Concretely: enumerate homomorphisms G -> Z/4Z, reduce their values mod 2,
+    // and express the resulting F_2-characters in the chosen H^1(G,F_2)-basis.
+    F := GF(2);
+    hdim := #H1basis;
+    if hdim eq 0 then
+        return [];
+    end if;
+
+    gens := [ G.i : i in [1..Ngens(G)] ];
+    m := #gens;
+    chars := [ OneCocycle(CM, b) : b in H1basis ];
+    basisVals := [];
+    for j in [1..hdim] do
+        Append(~basisVals, [ BitOfModuleElt(chars[j](<gens[i]>)) : i in [1..m] ]);
+    end for;
+
+    function H1CoordinatesFromGeneratorValues(vals)
+        for mask in [0..2^hdim-1] do
+            test := [ 0 : i in [1..m] ];
+            coords := [];
+            for j in [1..hdim] do
+                c := ((mask div 2^(j-1)) mod 2);
+                Append(~coords, c);
+                if c eq 1 then
+                    for i in [1..m] do
+                        test[i] := (test[i] + basisVals[j][i]) mod 2;
+                    end for;
+                end if;
+            end for;
+            if test eq vals then
+                return coords;
+            end if;
+        end for;
+        error "HomZ4ReductionsInH1: could not express a reduced Z/4-character in H1 coordinates";
+    end function;
+
+    function ExtendsToHomZ4(assign)
+        e := Identity(G);
+        A := AssociativeArray();
+        A[e] := 0;
+
+        for i in [1..m] do
+            g := gens[i];
+            v := assign[i] mod 4;
+            if IsDefined(A, g) and A[g] ne v then
+                return false, A;
+            end if;
+            A[g] := v;
+        end for;
+
+        stepGens := [];
+        stepVals := [];
+        for i in [1..m] do
+            Append(~stepGens, gens[i]);
+            Append(~stepVals, assign[i] mod 4);
+            Append(~stepGens, gens[i]^-1);
+            Append(~stepVals, (-assign[i]) mod 4);
+        end for;
+
+        queue := [ e ];
+        for g in gens do
+            if not (g in queue) then
+                Append(~queue, g);
+            end if;
+        end for;
+
+        head := 1;
+        while head le #queue do
+            x := queue[head];
+            head +:= 1;
+            vx := A[x];
+            for t in [1..#stepGens] do
+                y := x*stepGens[t];
+                vy := (vx + stepVals[t]) mod 4;
+                if IsDefined(A, y) then
+                    if A[y] ne vy then
+                        return false, A;
+                    end if;
+                else
+                    A[y] := vy;
+                    Append(~queue, y);
+                end if;
+            end for;
+        end while;
+
+        for x in G do
+            if not IsDefined(A, x) then
+                return false, A;
+            end if;
+        end for;
+        return true, A;
+    end function;
+
+    possible := [];
+    for i in [1..m] do
+        Append(~possible, [ a : a in [0..3] | ((Order(gens[i])*a) mod 4) eq 0 ]);
+    end for;
+
+    reductions := [];
+    procedure Recurse(pos, vals, ~reductions)
+        if pos gt m then
+            ok, A := ExtendsToHomZ4(vals);
+            if ok then
+                red := [ (A[gens[i]] mod 2) : i in [1..m] ];
+                Append(~reductions, H1CoordinatesFromGeneratorValues(red));
+            end if;
+            return;
+        end if;
+        for a in possible[pos] do
+            Recurse(pos+1, vals cat [a], ~reductions);
+        end for;
+    end procedure;
+
+    Recurse(1, [], ~reductions);
+    return SpanBasisF2(reductions, hdim);
+end function;
+
+function AlgebraicCoboundaryRelations(Udata, H1Image2Ghat4Basis, AlgBasis)
+    // Coboundaries from an element psi in Ghat[4] have F_2-valued residue
+    // k |-> ((k-1)/2 mod 2) * (2*psi).  Thus each eta=2*psi in 2*Ghat[4]
+    // gives one relation in Hom(U_2,Ghat[2]).
+    F := GF(2);
+    Ubas := Udata`Basis;
+    adim := #AlgBasis;
+    rels := [];
+
+    unitEpsilon := [ (((Ubas[a] - 1) div 2) mod 2) : a in [1..#Ubas] ];
+
+    for eta in H1Image2Ghat4Basis do
+        rel := [ F!0 : c in [1..adim] ];
+        for col in [1..adim] do
+            a := AlgBasis[col][1];
+            j := AlgBasis[col][2];
+            rel[col] := F!((unitEpsilon[a] * (Integers()!eta[j])) mod 2);
+        end for;
+        Append(~rels, rel);
+    end for;
+
+    return SpanBasisF2(rels, adim);
+end function;
+
+function AlgebraicResidueData(G, Creps, CM, Udata, ResidueIndex)
     F := GF(2);
     H1 := CohomologyGroup(CM,1);
     H1basis := CohomologyGroupGenerators(H1);
@@ -403,29 +660,67 @@ function AlgebraicResidueData(G, Creps, CM, Udata, Nlist)
     end for;
 
     Ubas := Udata`Basis;
-    AlgBasis := [ <a,j> : a in [1..#Ubas], j in [1..#H1basis] ];
+    RawAlgBasis := [ <a,j> : a in [1..#Ubas], j in [1..#H1basis] ];
 
-    R := SeqSumInt([ #Nlist[i] : i in [1..#Nlist] ]);
-    A := ZeroMatrix(F, R, #AlgBasis);
+    R := #ResidueIndex;
+    RawA := ZeroMatrix(F, R, #RawAlgBasis);
 
-    row := 0;
-    for i in [1..#Creps] do
-        for k in Nlist[i] do
-            row +:= 1;
-            uk := Udata`Coordinates(k);
-            for col in [1..#AlgBasis] do
-                a := AlgBasis[col][1];
-                j := AlgBasis[col][2];
-                A[row,col] := F!((uk[a] * chiVals[j][i]) mod 2);
-            end for;
+    for rowno in [1..#ResidueIndex] do
+        i := ResidueIndex[rowno][1];
+        k := ResidueIndex[rowno][2];
+        uk := Udata`Coordinates(k);
+        for col in [1..#RawAlgBasis] do
+            a := RawAlgBasis[col][1];
+            j := RawAlgBasis[col][2];
+            RawA[rowno,col] := F!((uk[a] * chiVals[j][i]) mod 2);
         end for;
     end for;
 
-    RF := recformat< H1, H1Basis, CharacterValuesOnC, AlgebraicBasis, ResidueMatrix >;
+    H1Image2Ghat4Basis := HomZ4ReductionsInH1(G, CM, H1basis);
+    AlgRelationBasis := AlgebraicCoboundaryRelations(Udata, H1Image2Ghat4Basis, RawAlgBasis);
+
+    // Choose representatives for the quotient of the old algebraic coefficient
+    // space by the coboundary relations.
+    AlgQuotientBasisCoords := ComplementBasisF2(#RawAlgBasis, AlgRelationBasis);
+    QuotA := ZeroMatrix(F, R, #AlgQuotientBasisCoords);
+    for q in [1..#AlgQuotientBasisCoords] do
+        col := LinearCombinationOfColumns(RawA, AlgQuotientBasisCoords[q]);
+        for i in [1..R] do
+            QuotA[i,q] := col[i];
+        end for;
+    end for;
+
+    RelationResidueBasis := [];
+    for rel in AlgRelationBasis do
+        Append(~RelationResidueBasis, LinearCombinationOfColumns(RawA, rel));
+    end for;
+    RelationResidueBasis := SpanBasisF2(RelationResidueBasis, R);
+    P := QuotientProjectionMatrixF2(R, RelationResidueBasis);
+    QuotAProjected := P*QuotA;
+
+    AlgQuotientBasis := [];
+    for q in [1..#AlgQuotientBasisCoords] do
+        Append(~AlgQuotientBasis, [ RawAlgBasis[c] : c in [1..#RawAlgBasis] | AlgQuotientBasisCoords[q][c] eq F!1 ]);
+    end for;
+
+    RF := recformat< H1, H1Basis, CharacterValuesOnC,
+                     RawAlgebraicBasis, RawResidueMatrix,
+                     H1Image2Ghat4BasisCoords, AlgebraicRelationBasisCoords,
+                     AlgebraicRelationResidueBasis, ResidueQuotientProjection,
+                     AlgebraicBasis, AlgebraicBasisCoords,
+                     ResidueMatrix, ResidueMatrixBeforeProjection >;
     return rec< RF | H1 := H1, H1Basis := H1basis,
                      CharacterValuesOnC := chiVals,
-                     AlgebraicBasis := AlgBasis,
-                     ResidueMatrix := A >;
+                     RawAlgebraicBasis := RawAlgBasis,
+                     RawResidueMatrix := RawA,
+                     H1Image2Ghat4BasisCoords := H1Image2Ghat4Basis,
+                     AlgebraicRelationBasisCoords := AlgRelationBasis,
+                     AlgebraicRelationResidueBasis := RelationResidueBasis,
+                     ResidueQuotientProjection := P,
+                     AlgebraicBasis := AlgQuotientBasis,
+                     AlgebraicBasisCoords := AlgQuotientBasisCoords,
+                     ResidueMatrix := QuotAProjected,
+                     ResidueMatrixBeforeProjection := QuotA >;
 end function;
 
 // -----------------------------------------------------------------------------
@@ -487,7 +782,12 @@ function PartiallyRamifiedBrauerPairs(G, Creps : MaxEnumerate := 4096, CheckInpu
                      H2, H2Basis, GeometricResidueToH1Matrix,
                      GeometricKernelBasisCoords, GeometricBasisH2,
                      GeometricExtensions, GeometricMarkings, GeometricResidueMatrix,
-                     H1, H1Basis, AlgebraicBasis, AlgebraicResidueMatrix,
+                     H1, H1Basis, AlgebraicBasis, AlgebraicBasisCoords,
+                     RawAlgebraicBasis, RawAlgebraicResidueMatrix,
+                     H1Image2Ghat4BasisCoords, AlgebraicRelationBasisCoords,
+                     AlgebraicRelationResidueBasis, ResidueQuotientProjection,
+                     AlgebraicResidueMatrix, AlgebraicResidueMatrixBeforeProjection,
+                     RawGeometricResidueMatrix, GeometricResidueMatrixBeforeProjection,
                      MatchBasis, MatchingPairs, MatchingPairsEnumerated,
                      MatchRecord >;
 
@@ -518,12 +818,9 @@ function PartiallyRamifiedBrauerPairs(G, Creps : MaxEnumerate := 4096, CheckInpu
         end for;
     end if;
 
-    ResidueIndex := [];
-    for i in [1..#Nlist] do
-        for k in Nlist[i] do
-            Append(~ResidueIndex, <i,k>);
-        end for;
-    end for;
+    // Residue rows must include all power transitions C_i^k=C_j, not just
+    // stabilizers C_i^k=C_i.  Omitting i->j rows is the bug fixed in v3.
+    ResidueIndex := PowerTransitionRows(G, Csets, Udata`U2);
 
     CM := TrivialF2CohomologyModule(G);
 
@@ -539,17 +836,20 @@ function PartiallyRamifiedBrauerPairs(G, Creps : MaxEnumerate := 4096, CheckInpu
         Ext := CentralExtensionFromH2(G, CM, GK`KernelBasisH2[j]);
         Append(~Exts, Ext);
         Append(~Marks, GeometricMarkingData(G, Creps, Ext));
-        col := GeometricPowerResidueColumn(G, Creps, Nlist, Ext);
+        col := GeometricPowerResidueColumn(G, Creps, ResidueIndex, Ext);
         for r in [1..R] do
             GeoRes[r,j] := col[r];
         end for;
     end for;
 
-    // Step 5: algebraic residue basis.
-    Alg := AlgebraicResidueData(G, Creps, CM, Udata, Nlist);
+    // Step 5: algebraic residue basis, with the coboundary quotient from 2*Ghat[4].
+    Alg := AlgebraicResidueData(G, Creps, CM, Udata, ResidueIndex);
 
-    // Step 6: matching pairs.
-    Match := MatchResidues(GeoRes, Alg`ResidueMatrix : MaxEnumerate := MaxEnumerate);
+    // Project the geometric residue matrix to the same quotient residue codomain.
+    GeoResProjected := Alg`ResidueQuotientProjection * GeoRes;
+
+    // Step 6: matching pairs in the quotient codomain and quotient algebraic group.
+    Match := MatchResidues(GeoResProjected, Alg`ResidueMatrix : MaxEnumerate := MaxEnumerate);
 
     return rec< RF | Ok := true, Message := "ok", GOrder := #G, Modulus := N,
                      CRepresentatives := Creps, Csets := Csets,
@@ -560,10 +860,20 @@ function PartiallyRamifiedBrauerPairs(G, Creps : MaxEnumerate := 4096, CheckInpu
                      GeometricKernelBasisCoords := GK`KernelBasisCoords,
                      GeometricBasisH2 := GK`KernelBasisH2,
                      GeometricExtensions := Exts, GeometricMarkings := Marks,
-                     GeometricResidueMatrix := GeoRes,
+                     RawGeometricResidueMatrix := GeoRes,
+                     GeometricResidueMatrixBeforeProjection := GeoRes,
+                     GeometricResidueMatrix := GeoResProjected,
                      H1 := Alg`H1, H1Basis := Alg`H1Basis,
                      AlgebraicBasis := Alg`AlgebraicBasis,
+                     AlgebraicBasisCoords := Alg`AlgebraicBasisCoords,
+                     RawAlgebraicBasis := Alg`RawAlgebraicBasis,
+                     RawAlgebraicResidueMatrix := Alg`RawResidueMatrix,
+                     H1Image2Ghat4BasisCoords := Alg`H1Image2Ghat4BasisCoords,
+                     AlgebraicRelationBasisCoords := Alg`AlgebraicRelationBasisCoords,
+                     AlgebraicRelationResidueBasis := Alg`AlgebraicRelationResidueBasis,
+                     ResidueQuotientProjection := Alg`ResidueQuotientProjection,
                      AlgebraicResidueMatrix := Alg`ResidueMatrix,
+                     AlgebraicResidueMatrixBeforeProjection := Alg`ResidueMatrixBeforeProjection,
                      MatchBasis := Match`MatchBasis,
                      MatchingPairs := Match`MatchingPairs,
                      MatchingPairsEnumerated := Match`MatchingPairsEnumerated,
@@ -579,7 +889,8 @@ procedure PrintBrauerPairSummary(R)
     printf "|G| = %o, modulus 2|G| = %o\n", R`GOrder, R`Modulus;
     if assigned R`GeometricBasisH2 then
         printf "dim H^2(G,F_2) geometric residue kernel = %o\n", #R`GeometricBasisH2;
-        printf "dim algebraic Hom(U_2,Ghat[2]) = %o\n", #R`AlgebraicBasis;
+        printf "dim corrected algebraic quotient = %o\n", #R`AlgebraicBasis;
+        printf "dim raw Hom(U_2,Ghat[2]) = %o, relations from 2*Ghat[4] = %o\n", #R`RawAlgebraicBasis, #R`AlgebraicRelationBasisCoords;
         printf "number of residue coordinates = %o\n", #R`ResidueIndex;
         printf "dimension of matching pair space = %o\n", #R`MatchBasis;
         if R`MatchingPairsEnumerated then
