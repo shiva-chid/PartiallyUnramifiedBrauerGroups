@@ -9,3 +9,6 @@ At present, `main.mg` presents an overgroup $$\tilde{B}_{\mathcal{C},G}$$ of the
     - There is a short exact sequence
     $$1\to \hat{G}/2\hat{G}\to \tilde{B}_{\mathcal{C},G}\to \text{Br}_{\mathcal{C}}^eBG\to 0$$
 It also gives maps which take elements of this abstract groups and return the coordinates as homomorphisms (respectively extension classes).
+
+## Acknowledgements
+ChatGPT has been used for bug checking and general assistance, but all code is written and checked by the humans.
