@@ -32,7 +32,7 @@ function Validate(G, Creps)
 end function;
 
 
-N := Exp(G) * 2;
+N := Exponent(G) * 2;
 R := Integers(N);
 U, phi := UnitGroup(R);
 U2 := SylowSubgroup(U, 2);
