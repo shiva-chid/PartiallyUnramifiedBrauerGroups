@@ -186,6 +186,34 @@ procedure GetAlgebraicPart(~R)
     R`M1:=M1;
 end procedure;
 
+/////////////////////////////////////////////////////////////////////
+// Returns the H1 component of an element of the abstract Btilde group.
+function (x,R)
+    coeffs:=Eltseq(x);
+    a:=R`H1!0;
+    for i in [1..#coeffs] do
+        if coeffs[i] ne 0 then
+            a+:=R`Btildegens[i][1];
+        end if;
+    end for;
+    return a;
+end function;
+
+
+/////////////////////////////////////////////////////////////////////
+// Returns the H2 component of an element of the abstract Btilde group.
+function BtildeH2Component(x,R)
+    coeffs:=Eltseq(x);
+    b:=R`H2!0;
+    for i in [1..#coeffs] do
+        if coeffs[i] ne 0 then
+            b+:=R`Btildegens[i][2];
+        end if;
+    end for;
+    return b;
+end function;
+
+
 
 /////////////////////////////////////////////////////////////////////
 function Btilde(G,C)
@@ -207,7 +235,6 @@ function Btilde(G,C)
     d1:=NumberOfRows(R`M1);
     d2:=NumberOfRows(R`M2);
 
-    // FIX: the last d2 coordinates refer to the chosen basis of H2Marked
     H2basis:=[R`H2!x:x in Basis(R`H2Marked)];
     Btilde_gens:=[];
 
@@ -217,7 +244,6 @@ function Btilde(G,C)
             if v[i] ne 0 then a+:=R`H1.i; end if;
         end for;
 
-        // FIX: reconstruct the H2 element from the basis of H2Marked
         b:=R`H2!0;
         for i in [1..d2] do
             if v[d1+i] ne 0 then b+:=H2basis[i]; end if;
@@ -234,12 +260,3 @@ function Btilde(G,C)
     return R;
 end function;
 
-
-// G:=Sym(4);
-// C:=[G!(1,2)];
-
-
-// G:=CyclicGroup(4);
-// C:=[G.1,G.1^3];
-
-// R:=Btilde(G,C);
