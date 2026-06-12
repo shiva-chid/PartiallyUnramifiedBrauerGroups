@@ -1,4 +1,4 @@
-\\ Generates the conjugacy classes of G from the representatives of Creps.
+// Generates the conjugacy classes of G from the representatives of Creps.
 function GenerateCSets(G, Creps)
     Csets := [];
     reps := AssociativeArray();
@@ -16,7 +16,7 @@ function GenerateCSets(G, Creps)
     return reps, Csets;
 end function;
 
-\\ Checks whether the representatives of Creps generate G.
+// Checks whether the representatives of Creps generate G.
 function Validate(G, Creps)
     reps, Csets := GenerateCSets(G, Creps);
     if #Csets eq 0 then
@@ -32,13 +32,13 @@ function Validate(G, Creps)
 end function;
 
 
-N := Exp(G) * 2;
+N := Exponent(G) * 2;
 R := Integers(N);
 U, phi := UnitGroup(R);
 U2 := SylowSubgroup(U, 2);
 
-\\ Generates representatives of the orbits of the powering action on the conjugacy classes of G.
-\\ Also keeps track of the stabilizers of the powering action.
+// Generates representatives of the orbits of the powering action on the conjugacy classes of G.
+// Also keeps track of the stabilizers of the powering action.
 function PowerRepresentative(G, reps, Csets)
     Remaining := {1..#Csets};
     PowerReps := AssociativeArray();
