@@ -39,24 +39,34 @@ function InitialiseBrauerDataStructure(G,C)
     ZZ := Integers();
     U, i := UnitGroup(Zn);
     Umod2, pi2 := ElementaryAbelianQuotient(U,2); // enough to work with this quotient, because we only consider homomorphisms to a 2-torsion group.
+    s := Time();
+    // Computing C-stabilizers naively. // This is an expensive step for large abelian groups like C_{2^10} or C_{2^6} x C_{2^6}
     CStabilisers:=[];
     for g in C do
-        g_stab:=[];
-        for x in U do
-            if IsConjugate(G,g^(ZZ!i(x)),g) then Append(~g_stab,x); end if;
+        ordg := Order(g);
+        Zg := Integers(ordg);
+        Ug, ig := UnitGroup(Zg);
+        g_stab:=sub<Ug|>;
+        for x in Ug do
+            if x in g_stab then continue; end if;
+            if IsConjugate(G,g^(ZZ!ig(x)),g) then g_stab := sub<Ug|g_stab,x>; end if;
         end for;
-        Append(~CStabilisers,sub<U|g_stab>);
+        h := hom<U->Ug|[(Zg!i(U.j))@@ig : j in [1..Ngens(U)]]>;
+        Append(~CStabilisers,g_stab@@h);
     end for;
+    printf "Computing CStabilisers took: %o\n", Time(s);
 
+    s := Time();
     gensH:=[];
     for H in CStabilisers do
         Hmod2:=sub<Umod2|[pi2(h):h in Generators(H)]>;
         Append(~gensH,[Umod2!Hmod2.i:i in [1..Ngens(Hmod2)]]);
     end for;
+    printf "Generators for CStabilisers mod 2 took: %o\n", Time(s);
 
     return rec< BrauerDataFormat | G := G, C := C,
         CStabilisers:=CStabilisers, gensH:=gensH, n := n,
-        U:=U, i:=i, Umod2:=Umod2, pi2:=pi2>;
+        U:=U, i:=i, Umod2:=Umod2, pi2:=pi2>; // creating the record also seems to be an expensive step for bicyclic groups C_{2^6} x C_{2^6}
 end function;
 
 
@@ -95,8 +105,12 @@ end function;
 procedure GetMarkedGeometricElements(~R)
     F2:=GF(2);
     R`F2:=TrivialModule(R`G,F2);
+    s := Time();
     R`CMH2:=CohomologyModule(R`G,R`F2);
+    printf "Computed CohomologyModule: %o\n", Time(s);
+    s := Time();
     R`H2:=CohomologyGroup(R`CMH2,2);
+    printf "Computed H2: %o\n", Time(s);
     rows:=[];
     for beta in Basis(R`H2) do
         beta_cocycle:=TwoCocycle(R`CMH2,beta);
@@ -122,17 +136,20 @@ procedure GetGeometricPart(~R)
 // - the second cohomology group H^2(G, Z/2)
 // returns the geometric Brauer residue map as a matrix over GF(2). Its action on rows represents
 // the map from H^2(G, Z/2) to the direct sum of Hom(H, Z/2) for H in His.}
+    s := Time();
     GetMarkedGeometricElements(~R);
+    printf "GetMarkedGeometricElements took: %o\n", Time(s);
 
     H2basis:=[R`H2!x:x in Basis(R`H2Marked)];
     Ncols:=&+[#R`gensH[j]:j in [1..#R`C]];
     vals:=[];
 
+    s := Time();
     for chi in H2basis do
         // for each basis element of H^2(G,Z/2), first produce the corresponding central extension.
-        extnFP,piFP,iotaFP:=Extension(R`CMH2,chi);
+        time extnFP,piFP,iotaFP:=Extension(R`CMH2,chi);
 
-        extn,isoToPerm:=PermutationGroup(extnFP);
+        time extn,isoToPerm:=PermutationGroup(extnFP); // this is an expensive step for large groups like A_n, S_n
         pi:=hom<extn->R`G|
             [piFP(extn.i@@isoToPerm):i in [1..Ngens(extn)]]>;
 
@@ -150,6 +167,7 @@ procedure GetGeometricPart(~R)
         end for;
         Append(~vals,val);
     end for;
+    printf "Constructing central extensions and Geometric residue map took: %o\n", Time(s);
 
     if #vals eq 0 then
         M2:=ZeroMatrix(GF(2),0,Ncols);
@@ -232,7 +250,9 @@ function Btilde(G,C)
 // - the abelian group H^1((Z/2|G|)^*, Gdual[2])=Hom(_,_)
 // - H^2(G, Z/2)
 // - a subspace of (F_2)^n where n is the sum of F_2-dimension of the first two return values.}
+    s := Time();
     R:=InitialiseBrauerDataStructure(G,C);
+    printf "InitialiseBrauerDataStructure took: %o\n", Time(s);
     GetGeometricPart(~R);
     GetAlgebraicPart(~R);
     M:=VerticalJoin(R`M1,R`M2);
