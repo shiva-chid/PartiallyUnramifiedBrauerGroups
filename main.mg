@@ -147,12 +147,14 @@ procedure GetGeometricPart(~R)
     s := Time();
     for chi in H2basis do
         // for each basis element of H^2(G,Z/2), first produce the corresponding central extension.
+        time extn,pi,iota:=Extension(GrpPerm, R`CMH2,chi); // directly creates a permutation group. slightly better, but still expensive.
+/*
         time extnFP,piFP,iotaFP:=Extension(R`CMH2,chi);
 
         time extn,isoToPerm:=PermutationGroup(extnFP); // this is an expensive step for large groups like A_n, S_n
         pi:=hom<extn->R`G|
             [piFP(extn.i@@isoToPerm):i in [1..Ngens(extn)]]>;
-
+*/
         val:=[];
         for j in [1..#R`C] do
             gi:=R`C[j];
